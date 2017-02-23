@@ -2,7 +2,10 @@ package navmesh
 
 import (
 	"errors"
+	"math/rand"
+
 	_ "fmt"
+
 	. "github.com/spate/vectormath"
 )
 
@@ -24,6 +27,26 @@ type Path struct {
 }
 
 type NavMesh struct{}
+
+// 从P1处随机偏移一个到(min, max)的长度。
+func spinOffset(p1, p2 Point3, min, max float32) Point3 {
+	var v1 Vector3
+
+	P3Sub(&v1, &p2, &p1)
+	if v1.Length() < min {
+		return p1
+	}
+
+	if v1.Length() < max {
+		max = v1.Length()
+	}
+
+	V3Normalize(&v1, &v1)
+	V3ScalarMul(&v1, &v1, rand.Float32()*(max-min)+min)
+	V3AddP3(&v1, &v1, &p1)
+	P3MakeFromV3(&p1, &v1)
+	return p1
+}
 
 func (nm *NavMesh) Route(list TriangleList, start, end *Point3) (*Path, error) {
 	r := Path{}
@@ -113,4 +136,79 @@ func (nm *NavMesh) update_vis(v0 *Point3, vertices []Point3, indices []int32, i1
 	} else {
 		return &left_vec, &right_vec, i1, i2
 	}
+}
+
+func (nm *NavMesh) RouteWithRandOffset(list TriangleList,
+	start, end *Point3,
+	min, max float32) (*Path, error) {
+
+	if min > max {
+		max, min = min, max
+	}
+	r := Path{}
+	// 计算临边
+	border := nm.create_border(list.Triangles)
+	// 目标点
+	vertices := append(list.Vertices, *end)
+	border = append(border, int32(len(vertices))-1, int32(len(vertices))-1)
+
+	// 第一个可视区域
+	line_start := *start
+	last_vis_left, last_vis_right, last_p_left, last_p_right := nm.update_vis(start, vertices, border, 0, 1)
+	var res Vector3
+	for k := 2; k <= len(border)-2; k += 2 {
+		cur_vis_left, cur_vis_right, p_left, p_right := nm.update_vis(
+			&line_start, vertices, border, k, k+1)
+		V3Cross(&res, last_vis_left, cur_vis_right)
+		if res.Z > 0 { // 左拐点
+			line_start = vertices[border[last_p_left]]
+			line_start = spinOffset(line_start,
+				vertices[border[last_p_right]], min, max)
+			r.Line = append(r.Line, line_start)
+			// 找到一条不共点的边作为可视区域
+			i := 2 * (last_p_left/2 + 1)
+			for ; i <= len(border)-2; i += 2 {
+				if border[last_p_left] != border[i] && border[last_p_left] != border[i+1] {
+					last_vis_left, last_vis_right, last_p_left, last_p_right = nm.update_vis(&line_start, vertices, border, i, i+1)
+					break
+				}
+			}
+
+			k = i
+			continue
+		}
+
+		V3Cross(&res, last_vis_right, cur_vis_left)
+		if res.Z < 0 { // 右拐点
+			line_start = vertices[border[last_p_right]]
+			line_start = spinOffset(line_start,
+				vertices[border[last_p_left]], min, max)
+			r.Line = append(r.Line, line_start)
+			// 找到一条不共点的边
+			i := 2 * (last_p_right/2 + 1)
+			for ; i <= len(border)-2; i += 2 {
+				if border[last_p_right] != border[i] && border[last_p_right] != border[i+1] {
+					last_vis_left, last_vis_right, last_p_left, last_p_right = nm.update_vis(&line_start, vertices, border, i, i+1)
+					break
+				}
+			}
+
+			k = i
+			continue
+		}
+
+		V3Cross(&res, last_vis_left, cur_vis_left)
+		if res.Z < 0 {
+			last_vis_left = cur_vis_left
+			last_p_left = p_left
+		}
+
+		V3Cross(&res, last_vis_right, cur_vis_right)
+		if res.Z > 0 {
+			last_vis_right = cur_vis_right
+			last_p_right = p_right
+		}
+	}
+
+	return &r, nil
 }
