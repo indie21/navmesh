@@ -4,8 +4,6 @@ import (
 	"errors"
 	"math/rand"
 
-	_ "fmt"
-
 	. "github.com/spate/vectormath"
 )
 
@@ -126,6 +124,63 @@ func (nm *NavMesh) create_border(list [][3]int32) []int32 {
 	return border
 }
 
+// 按一定的比例随机收缩，可以让点有一定的变化.
+func (nm *NavMesh) shrink_border(list []int32, vertices []Point3, rate float32) (nBorder []int32, nVertices []Point3) {
+	nVertices = make([]Point3, len(list))
+	nBorder = make([]int32, len(list))
+
+	for k := 0; k < len(list); k += 2 {
+
+		// if vertices[list[k]] == vertices[list[k+1]] {
+		// 	nBorder[k] = int32(k)
+		// 	nBorder[k+1] = int32(k + 1)
+		// 	nVertices[k] = vertices[list[k]]
+		// 	nVertices[k+1] = vertices[list[k+1]]
+		// 	break
+		// }
+
+		//1.计算两点中点.
+		//2.计算当前中点到上下两点的向量.
+		//3.对向量大小进行减小后重新计算上线两点。
+		mx := (vertices[list[k]].X + vertices[list[k+1]].X) / 2
+		my := (vertices[list[k]].Y + vertices[list[k+1]].Y) / 2
+		mp := Point3{X: mx, Y: my, Z: 0}
+
+		var m1v, m2v Vector3
+		P3Sub(&m1v, &vertices[list[k]], &mp)
+		P3Sub(&m2v, &vertices[list[k+1]], &mp)
+
+		var m1v2, m2v2 Vector3
+		m1v2 = Vector3{
+			X: m1v.X * rate,
+			Y: m1v.Y * rate,
+			Z: m1v.Z * rate,
+		}
+
+		m2v2 = Vector3{
+			X: m2v.X * rate,
+			Y: m2v.Y * rate,
+			Z: m2v.Z * rate,
+		}
+
+		var n1, n2 Point3
+		P3AddV3(&n1, &mp, &m1v2)
+		P3AddV3(&n2, &mp, &m2v2)
+
+		// fmt.Printf("old %v %v\n", vertices[list[k]], vertices[list[k+1]])
+		// fmt.Printf("mid %v %v\n", mp, mp)
+		// fmt.Printf("vec %v %v\n", m1v, m2v)
+		// fmt.Printf("v2c %v %v\n", m1v2, m2v2)
+		// fmt.Printf("new %v %v\n\n", n1, n2)
+
+		nBorder[k] = int32(k)
+		nBorder[k+1] = int32(k + 1)
+		nVertices[k] = n1
+		nVertices[k+1] = n2
+	}
+	return
+}
+
 func (nm *NavMesh) update_vis(v0 *Point3, vertices []Point3, indices []int32, i1, i2 int) (l, r *Vector3, left, right int) {
 	var left_vec, right_vec, res Vector3
 	P3Sub(&left_vec, &vertices[indices[i1]], v0)
@@ -148,8 +203,12 @@ func (nm *NavMesh) RouteWithRandOffset(list TriangleList,
 	r := Path{}
 	// 计算临边
 	border := nm.create_border(list.Triangles)
+	// 将临边进行一定收缩变换.
+	// vertices := list.Vertices
+	border, vertices := nm.shrink_border(border, list.Vertices, 0.6+0.4*rand.Float32())
+
 	// 目标点
-	vertices := append(list.Vertices, *end)
+	vertices = append(vertices, *end)
 	border = append(border, int32(len(vertices))-1, int32(len(vertices))-1)
 
 	// 第一个可视区域
@@ -162,8 +221,6 @@ func (nm *NavMesh) RouteWithRandOffset(list TriangleList,
 		V3Cross(&res, last_vis_left, cur_vis_right)
 		if res.Z > 0 { // 左拐点
 			line_start = vertices[border[last_p_left]]
-			line_start = spinOffset(line_start,
-				vertices[border[last_p_right]], min, max)
 			r.Line = append(r.Line, line_start)
 			// 找到一条不共点的边作为可视区域
 			i := 2 * (last_p_left/2 + 1)
@@ -181,8 +238,6 @@ func (nm *NavMesh) RouteWithRandOffset(list TriangleList,
 		V3Cross(&res, last_vis_right, cur_vis_left)
 		if res.Z < 0 { // 右拐点
 			line_start = vertices[border[last_p_right]]
-			line_start = spinOffset(line_start,
-				vertices[border[last_p_left]], min, max)
 			r.Line = append(r.Line, line_start)
 			// 找到一条不共点的边
 			i := 2 * (last_p_right/2 + 1)
